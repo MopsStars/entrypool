@@ -1,6 +1,5 @@
 #!/bin/sh
-# Install entrypool (RU entry health checker).
-# Prefer running the timer on a host that is not the only monitored entry.
+# Install entrypool from this repo (or GitHub release binary).
 set -eu
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -8,12 +7,14 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
-for command in curl grep tar sha256sum systemctl; do
-  if ! command -v "$command" >/dev/null 2>&1; then
-    # tar/sha256sum only needed for release download; curl optional if building
-    :
-  fi
-done
+if ! command -v curl >/dev/null 2>&1; then
+  echo "curl is required" >&2
+  exit 1
+fi
+if ! command -v systemctl >/dev/null 2>&1; then
+  echo "systemctl is required" >&2
+  exit 1
+fi
 
 ENTRYPOOL_VERSION=${ENTRYPOOL_VERSION:-1.0.0}
 REPO=${ENTRYPOOL_REPO:-MopsStars/entrypool}
@@ -31,42 +32,67 @@ SOURCE_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TMP_DIR"' EXIT INT TERM
 
-LOCAL_BINARY="$SOURCE_DIR/dist/entrypool-linux-$ARCH"
+ASSET="entrypool-linux-$ARCH"
+LOCAL_BINARY="$SOURCE_DIR/dist/$ASSET"
+INSTALLED=0
+
 if [ -f "$LOCAL_BINARY" ]; then
+  echo "Installing local $LOCAL_BINARY"
   install -m 755 "$LOCAL_BINARY" /usr/local/bin/entrypool.new
-elif command -v go >/dev/null 2>&1 && [ -f "$SOURCE_DIR/go.mod" ]; then
+  INSTALLED=1
+fi
+
+if [ "$INSTALLED" -eq 0 ]; then
+  RELEASE_URL="https://github.com/${REPO}/releases/download/v${ENTRYPOOL_VERSION}"
+  echo "Downloading $RELEASE_URL/$ASSET ..."
+  if curl -fsSL --retry 3 "$RELEASE_URL/$ASSET" -o "$TMP_DIR/$ASSET"; then
+    if command -v sha256sum >/dev/null 2>&1 && \
+       curl -fsSL --retry 3 "$RELEASE_URL/SHA256SUMS" -o "$TMP_DIR/SHA256SUMS" 2>/dev/null; then
+      grep " $ASSET\$" "$TMP_DIR/SHA256SUMS" > "$TMP_DIR/$ASSET.sha256"
+      (cd "$TMP_DIR" && sha256sum -c "$ASSET.sha256")
+    fi
+    install -m 755 "$TMP_DIR/$ASSET" /usr/local/bin/entrypool.new
+    INSTALLED=1
+  else
+    echo "Release download failed, trying go build..." >&2
+  fi
+fi
+
+if [ "$INSTALLED" -eq 0 ] && command -v go >/dev/null 2>&1 && [ -f "$SOURCE_DIR/go.mod" ]; then
+  echo "Building from source..."
   (cd "$SOURCE_DIR" && CGO_ENABLED=0 GOOS=linux GOARCH="$ARCH" \
     go build -trimpath -ldflags="-s -w -X main.Version=${ENTRYPOOL_VERSION} -X main.Commit=local" \
     -o "$TMP_DIR/entrypool" .)
   install -m 755 "$TMP_DIR/entrypool" /usr/local/bin/entrypool.new
-elif command -v curl >/dev/null 2>&1; then
-  ASSET="entrypool-linux-$ARCH"
-  RELEASE_URL="https://github.com/${REPO}/releases/download/v${ENTRYPOOL_VERSION}"
-  echo "Downloading $RELEASE_URL/$ASSET ..."
-  curl -fsSL --retry 3 "$RELEASE_URL/$ASSET" -o "$TMP_DIR/$ASSET"
-  if curl -fsSL --retry 3 "$RELEASE_URL/SHA256SUMS" -o "$TMP_DIR/SHA256SUMS" 2>/dev/null; then
-    grep " $ASSET\$" "$TMP_DIR/SHA256SUMS" > "$TMP_DIR/$ASSET.sha256"
-    (cd "$TMP_DIR" && sha256sum -c "$ASSET.sha256")
-  fi
-  install -m 755 "$TMP_DIR/$ASSET" /usr/local/bin/entrypool.new
-else
-  echo "Need curl (to download release), go toolchain, or dist/entrypool-linux-$ARCH" >&2
+  INSTALLED=1
+fi
+
+if [ "$INSTALLED" -eq 0 ]; then
+  echo "Failed to install entrypool binary" >&2
   exit 1
 fi
+
 mv -f /usr/local/bin/entrypool.new /usr/local/bin/entrypool
 
 mkdir -p /etc/entrypool /var/lib/entrypool
 if [ ! -f /etc/entrypool/config.env ]; then
-  entrypool init-config
-  echo "Edit /etc/entrypool/config.env then:"
-  echo "  systemctl enable --now entrypool.timer"
+  if [ -f "$SOURCE_DIR/config.example.env" ]; then
+    install -m 600 "$SOURCE_DIR/config.example.env" /etc/entrypool/config.env
+  else
+    entrypool init-config
+  fi
+  echo "Created /etc/entrypool/config.env — fill ENTRY_IPS and tokens"
 fi
 
 install -m 644 "$SOURCE_DIR/systemd/entrypool.service" /etc/systemd/system/entrypool.service
 install -m 644 "$SOURCE_DIR/systemd/entrypool.timer" /etc/systemd/system/entrypool.timer
 systemctl daemon-reload
 
+echo
 echo "Installed: $(entrypool version)"
 echo "Config:    /etc/entrypool/config.env"
-echo "Enable:    systemctl enable --now entrypool.timer"
-echo "Once:      entrypool doctor && entrypool run"
+echo
+echo "Next:"
+echo "  nano /etc/entrypool/config.env"
+echo "  entrypool doctor"
+echo "  systemctl enable --now entrypool.timer"
