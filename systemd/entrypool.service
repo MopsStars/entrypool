@@ -1,0 +1,13 @@
+[Unit]
+Description=entrypool RU entry health check (one shot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/entrypool/config.env
+ExecStart=/usr/local/bin/entrypool run
+Nice=10
+
+[Install]
+WantedBy=multi-user.target
