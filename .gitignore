@@ -1,0 +1,8 @@
+# Binaries
+/entrypool
+/dist/
+*.exe
+
+# Local config / state
+/config.env
+/state.json
