@@ -16,7 +16,7 @@ for command in curl grep tar sha256sum systemctl; do
 done
 
 ENTRYPOOL_VERSION=${ENTRYPOOL_VERSION:-1.0.0}
-REPO=${ENTRYPOOL_REPO:-}
+REPO=${ENTRYPOOL_REPO:-MopsStars/entrypool}
 
 case "$(uname -m)" in
   x86_64|amd64) ARCH=amd64 ;;
@@ -39,9 +39,10 @@ elif command -v go >/dev/null 2>&1 && [ -f "$SOURCE_DIR/go.mod" ]; then
     go build -trimpath -ldflags="-s -w -X main.Version=${ENTRYPOOL_VERSION} -X main.Commit=local" \
     -o "$TMP_DIR/entrypool" .)
   install -m 755 "$TMP_DIR/entrypool" /usr/local/bin/entrypool.new
-elif [ -n "$REPO" ] && command -v curl >/dev/null 2>&1; then
+elif command -v curl >/dev/null 2>&1; then
   ASSET="entrypool-linux-$ARCH"
   RELEASE_URL="https://github.com/${REPO}/releases/download/v${ENTRYPOOL_VERSION}"
+  echo "Downloading $RELEASE_URL/$ASSET ..."
   curl -fsSL --retry 3 "$RELEASE_URL/$ASSET" -o "$TMP_DIR/$ASSET"
   if curl -fsSL --retry 3 "$RELEASE_URL/SHA256SUMS" -o "$TMP_DIR/SHA256SUMS" 2>/dev/null; then
     grep " $ASSET\$" "$TMP_DIR/SHA256SUMS" > "$TMP_DIR/$ASSET.sha256"
@@ -49,7 +50,7 @@ elif [ -n "$REPO" ] && command -v curl >/dev/null 2>&1; then
   fi
   install -m 755 "$TMP_DIR/$ASSET" /usr/local/bin/entrypool.new
 else
-  echo "Need local dist/, go toolchain, or ENTRYPOOL_REPO=owner/repo + curl" >&2
+  echo "Need curl (to download release), go toolchain, or dist/entrypool-linux-$ARCH" >&2
   exit 1
 fi
 mv -f /usr/local/bin/entrypool.new /usr/local/bin/entrypool
